@@ -1,6 +1,6 @@
 [build]
   command = "npm install"
-  publish = "public"
+  publish = "."
 
 [build.environment]
   SECRETS_SCAN_ENABLED = "false"
@@ -12,5 +12,5 @@
 
 [[redirects]]
   from = "/*"
-  to = "/index.html"
+  to = "/public/index.html"
   status = 200
