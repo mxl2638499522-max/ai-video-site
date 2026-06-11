@@ -9,6 +9,9 @@ const skills = require('./skills');
 const app = express();
 app.use(express.json());
 
+// DeepSeek 旗舰模型（可通过环境变量覆盖）
+const DS_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro';
+
 // ============ 敏感数据（服务端保护，浏览器看不到）============
 const SECRETS = {
   // DeepSeek API Key — Netlify 上用环境变量 DEEPSEEK_KEY
@@ -58,7 +61,7 @@ async function callDeepSeek(systemPrompt, messages, maxTokens = 1000) {
   const r = await fetch('https://api.deepseek.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SECRETS.deepseekKey },
-    body: JSON.stringify({ model: 'deepseek-chat', max_tokens: maxTokens, messages: msgs })
+    body: JSON.stringify({ model: DS_MODEL, max_tokens: maxTokens, messages: msgs })
   });
 
   if (!r.ok) {
@@ -67,7 +70,23 @@ async function callDeepSeek(systemPrompt, messages, maxTokens = 1000) {
   }
 
   const j = await r.json();
-  return (j.choices || []).map(c => (c.message || {}).content || '').filter(Boolean).join('\n');
+  const msg = (j.choices || [])[0]?.message || {};
+  let content = msg.content || '';
+  let reasoning = msg.reasoning_content || '';
+
+  // 剥离 <think> 标签，并入 reasoning
+  const thinkMatch = content.match(/<think>([\s\S]*?)<\/think>/);
+  if (thinkMatch) {
+    reasoning = (reasoning ? reasoning + '\n' : '') + thinkMatch[1].trim();
+    content = content.replace(/<think>[\s\S]*?<\/think>\n?/g, '').trim();
+  }
+
+  return {
+    content,
+    reasoning,
+    model: j.model || DS_MODEL,
+    cacheHit: (j.usage && j.usage.prompt_cache_hit_tokens) || 0
+  };
 }
 
 // ============ API 路由 ============
@@ -83,8 +102,8 @@ app.post('/api/polish', async (req, res) => {
     const { kind, prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: '缺少 prompt' });
     const sys = skills.getPolishSystem(kind);
-    const result = await callDeepSeek(sys, [{ role: 'user', content: prompt }], 1500);
-    res.json({ result });
+    const { content, model } = await callDeepSeek(sys, [{ role: 'user', content: prompt }], 3000);
+    res.json({ result: content, model });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -96,8 +115,8 @@ app.post('/api/idea', async (req, res) => {
     const { section, messages } = req.body;
     if (!messages || !messages.length) return res.status(400).json({ error: '缺少消息' });
     const systemPrompt = skills.getIdeaSystem(section);
-    const result = await callDeepSeek(systemPrompt, messages, 1500);
-    res.json({ result });
+    const { content, reasoning, model, cacheHit } = await callDeepSeek(systemPrompt, messages, 4000);
+    res.json({ result: content, reasoning, model, cacheHit });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

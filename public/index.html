@@ -180,6 +180,9 @@ a{color:var(--acL)}
 @media(max-width:680px){.formGrid{grid-template-columns:1fr}.page{padding:20px 14px 60px}.rail{width:52px}.rItem{width:46px}}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1c1e24;border:1px solid var(--acBd);color:var(--acL);font-size:12px;padding:8px 18px;border-radius:10px;z-index:99;display:none}
 .kbd{font-size:10px;color:var(--t3);border:1px solid var(--bd2);border-radius:4px;padding:0 5px;font-family:ui-monospace,monospace}
+.spin{width:18px;height:18px;border:2px solid rgba(255,255,255,.15);border-top-color:var(--acL);border-radius:50%;animation:spinA .8s linear infinite;display:inline-block;vertical-align:middle}
+@keyframes spinA{to{transform:rotate(360deg)}}
+.reasoning{font-size:11px;color:var(--t4);border-left:2px solid var(--bd2);padding:4px 0 4px 10px;margin-bottom:6px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
 
 /* 教程 */
 .tutStep{display:flex;gap:14px;margin-bottom:18px}
@@ -223,6 +226,10 @@ a{color:var(--acL)}
     <p style="font-size:12px;color:var(--t3)">聊出灵感后一键带去制作</p>
   </div>
   <div class="segWrap" id="ideaModes" style="margin-bottom:14px"></div>
+  <div class="flex" style="margin-bottom:10px;gap:8px;justify-content:space-between">
+    <button class="pill" id="reasoningToggle" onclick="toggleReasoning()">思考过程：关</button>
+    <span class="tiny" id="modelTag" style="color:var(--t4)">模型：—</span>
+  </div>
   <div class="chatWrap">
     <div class="hintRow" id="ideaHints"></div>
     <div class="chatLog" id="chatLog"></div>
@@ -386,7 +393,7 @@ function seedDb(){
       {id:'copy',name:'文案迭代',kind:'copy'}
     ],
     mainSkills:[{id:'ms_video',name:'视频提示词 Skill',desc:'服务端保护'},{id:'ms_image',name:'图片提示词 Skill',desc:'服务端保护'}],
-    settings:{},
+    settings:{showReasoning:false},
     chat:[]
   };
 }
@@ -631,6 +638,13 @@ function setIdeaMode(id){
   const sk=curSkill();
   addMsg('s',`— 已切换到「${sk.name}」${sk.kind==='copy'?'：把原文案直接贴进来':'板块'} —`);
 }
+function toggleReasoning(){
+  if(!DB.settings)DB.settings={};
+  DB.settings.showReasoning=!DB.settings.showReasoning;
+  dbSave();
+  const btn=document.getElementById('reasoningToggle');
+  if(btn)btn.textContent='思考过程：'+(DB.settings.showReasoning?'开':'关');
+}
 const MODE_HINTS={
   train:['给我三个小钻风的新选题','最近什么内容数据好？','端午返乡能做什么应景点子','图文攻略还能怎么出新意'],
   ticket:['周末亲子景区，来几个点子','排队痛点怎么奇观化','门票攻略图文怎么做差异'],
@@ -677,14 +691,26 @@ async function sendIdea(){
   const txt=inp.value.trim(); if(!txt)return;
   inp.value=''; inp.style.height='auto'; addMsg('u',txt);
   IDEA_HISTORY.push({role:'user',content:txt});
-  const loading=addMsg('s','...');
+  const log=document.getElementById('chatLog');
+  const loading=document.createElement('div');
+  loading.className='msg msgSys';
+  loading.innerHTML='<span class="spin"></span> 思考中';
+  log.appendChild(loading);
+  log.scrollTop=log.scrollHeight;
   try{
     const r=await fetch('/api/idea',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({section:ideaMode,messages:IDEA_HISTORY.slice(-12)})});
     const d=await r.json();
     loading.remove();
     if(d.error)throw new Error(d.error);
+    if(d.model){ const mt=document.getElementById('modelTag'); if(mt)mt.textContent='模型：'+d.model; }
+    if(DB.settings.showReasoning && d.reasoning){
+      const rd=document.createElement('div'); rd.className='msg msgSys';
+      rd.innerHTML='<div class="reasoning"><b>思考：</b>'+esc(d.reasoning)+'</div>';
+      log.appendChild(rd);
+    }
     IDEA_HISTORY.push({role:'assistant',content:d.result});
     addMsg('a',d.result);
+    log.scrollTop=log.scrollHeight;
   }catch(e){
     loading.remove();
     addMsg('s','调用失败：请确认服务器在运行。');
@@ -1162,7 +1188,11 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape')closeModal(); });
 function initRender(){
   renderBadges(); refreshPills(); renderQts(); renderRecent(); renderTutorial();
   renderAssets(); renderProjects(); renderCost(); renderSettings();
-  renderIdeaModes(); restoreChatHistory(); renderIdeaHints(); bindChatInput();
+  renderIdeaModes(); renderReasoningToggle(); restoreChatHistory(); renderIdeaHints(); bindChatInput();
+}
+function renderReasoningToggle(){
+  const btn=document.getElementById('reasoningToggle');
+  if(btn)btn.textContent='思考过程：'+(DB.settings&&DB.settings.showReasoning?'开':'关');
 }
 (async function(){
   const loaded=await rawLoad();
