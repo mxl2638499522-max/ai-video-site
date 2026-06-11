@@ -8,6 +8,9 @@
 [functions]
   included_files = ["skills/**", "skills.js"]
 
+[functions."api"]
+  timeout = 26
+
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/api/:splat"
