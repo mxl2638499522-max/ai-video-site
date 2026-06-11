@@ -1027,7 +1027,7 @@ function renderSettings(){
     (DB.mainSkills||[]).map(s=>`<tr>
       <td style="width:140px"><b style="font-size:12px">${esc(s.name)}</b></td>
       <td style="width:200px"><span class="tiny">${esc(s.desc)}</span></td>
-      <td><span class="tiny">${esc(s.prompt.slice(0,80))}…</span></td>
+      <td><span class="tiny">${esc((s.prompt||'').slice(0,80))}…</span></td>
       <td style="width:50px"><button class="btnA" style="display:none">改</button></td></tr>`).join('');
   document.getElementById('platTbl').innerHTML='<tr><th>平台</th><th>余额</th><th>单位</th><th>备注</th><th></th></tr>'+
     DB.platforms.map(p=>`<tr>
@@ -1054,7 +1054,7 @@ function renderSettings(){
     (DB.ideaSkills||[]).map(s=>`<tr>
       <td style="width:90px">${esc(s.name)}</td>
       <td style="width:70px">${s.kind==='copy'?'文案':'点子'}</td>
-      <td><span class="tiny">${esc(s.prompt.slice(0,60))}…</span></td>
+      <td><span class="tiny">${esc((s.prompt||'').slice(0,60))}…</span></td>
       <td style="width:90px"><button class="btnA" style="display:none">改</button> <button class="btnD" onclick="if(confirm('删除板块？')){DB.ideaSkills=DB.ideaSkills.filter(x=>x.id!=='${s.id}');dbSave();renderSettings();renderIdeaModes();}">删</button></td></tr>`).join('');
 }
 function openSkillModal(id){
@@ -1274,8 +1274,6 @@ function renderReasoningToggle(){
   if(!loaded)dbSave();
   if(DB.settings&&DB.settings.curProjectId){const p=DB.projects.find(x=>x.id===DB.settings.curProjectId);if(p)CUR_PROJECT=p.id;else DB.settings.curProjectId='';dbSave();}
   initRender();
-  // 兜底：确保板块胶囊一定渲染（即使 initRender 中某步静默失败）
-  setTimeout(()=>{ renderIdeaModes(); renderReasoningToggle(); }, 20);
 })();
 
 </script>
