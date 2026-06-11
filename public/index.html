@@ -639,7 +639,8 @@ let ideaMode='copy';
 // BASE_CHARTER/ideaSysPrompt/curSkill removed (server-side)
 function renderIdeaModes(){
   const w=document.getElementById('ideaModes');
-  const list=(DB.ideaSkills||[]).slice();
+  let list=(DB.ideaSkills||[]).slice();
+  if(!list.length) list=seedDb().ideaSkills.slice();
   const copyIdx=list.findIndex(s=>s.id==='copy');
   if(copyIdx>0){ const copy=list.splice(copyIdx,1)[0]; list.unshift(copy); }
   w.innerHTML=list.map(s=>`<button class="seg ${ideaMode===s.id?'on':''}" onclick="setIdeaMode('${s.id}')">${esc(s.name)}</button>`).join('');
@@ -1268,7 +1269,7 @@ function renderReasoningToggle(){
     if(pub.skus) DB.skus=pub.skus;
     if(pub.chars) DB.chars=pub.chars;
   }catch(e){}
-  ['platforms','models','skus','chars','plates','photos','projects','outputs','ledger','ideaSkills','mainSkills','chat'].forEach(k=>{if(!DB[k])DB[k]=seedDb()[k];});
+  ['platforms','models','skus','chars','plates','photos','projects','outputs','ledger','ideaSkills','mainSkills','chat'].forEach(k=>{const v=DB[k];if(!v||(Array.isArray(v)&&!v.length))DB[k]=seedDb()[k];});
   if(!loaded)dbSave();
   if(DB.settings&&DB.settings.curProjectId){const p=DB.projects.find(x=>x.id===DB.settings.curProjectId);if(p)CUR_PROJECT=p.id;else DB.settings.curProjectId='';dbSave();}
   initRender();
