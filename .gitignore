@@ -2,3 +2,8 @@ node_modules/
 .env
 # trigger deploy
 
+
+.vercel
+
+# Local Netlify folder
+.netlify

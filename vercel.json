@@ -1,5 +1,14 @@
 {
   "buildCommand": "npm install",
-  "outputDirectory": ".",
-  "rewrites": [{ "source": "/(.*)", "destination": "/server.js" }]
+  "outputDirectory": "public",
+  "functions": {
+    "api/*.js": {
+      "memory": 512,
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }

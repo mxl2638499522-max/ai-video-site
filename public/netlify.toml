@@ -1,0 +1,16 @@
+[build]
+  command = "npm install"
+  publish = "."
+
+[build.environment]
+  SECRETS_SCAN_ENABLED = "false"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/public/index.html"
+  status = 200
