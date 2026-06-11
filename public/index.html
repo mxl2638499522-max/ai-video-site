@@ -226,16 +226,16 @@ a{color:var(--acL)}
     <p style="font-size:12px;color:var(--t3)">聊出灵感后一键带去制作</p>
   </div>
   <div class="segWrap" id="ideaModes" style="margin-bottom:14px"></div>
-  <div class="flex" style="margin-bottom:10px;gap:8px;justify-content:space-between">
-    <button class="pill" id="reasoningToggle" onclick="toggleReasoning()">思考过程：关</button>
-    <span class="tiny" id="modelTag" style="color:var(--t4)">模型：—</span>
-  </div>
   <div class="chatWrap">
     <div class="hintRow" id="ideaHints"></div>
     <div class="chatLog" id="chatLog"></div>
     <div class="chatBar">
       <textarea id="chatInput" rows="1" placeholder="例如：给我三个小钻风的新选题，要 10 秒能拍完的"></textarea>
       <button class="sendBtn" onclick="sendIdea()" aria-label="发送"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M6 11l6-6 6 6"/></svg></button>
+      <div class="flex" style="grid-column:1/-1;gap:8px;align-items:center">
+        <button class="pill" id="reasoningToggle" onclick="toggleReasoning()" style="font-size:10px;padding:2px 10px">思考：关</button>
+        <span class="tiny" id="modelTag" style="color:var(--t4)">模型：—</span>
+      </div>
     </div>
   </div>
 </section>
