@@ -626,11 +626,14 @@ async function polishOut(id){
 /* ================= 灵感聊天（板块化 skill） ================= */
 const IDEA_HISTORY=[];
 let CUR_PROJECT=null;
-let ideaMode='train';
+let ideaMode='copy';
 // BASE_CHARTER/ideaSysPrompt/curSkill removed (server-side)
 function renderIdeaModes(){
   const w=document.getElementById('ideaModes');
-  w.innerHTML=(DB.ideaSkills||[]).map(s=>`<button class="seg ${ideaMode===s.id?'on':''}" onclick="setIdeaMode('${s.id}')">${esc(s.name)}</button>`).join('');
+  const list=(DB.ideaSkills||[]).slice();
+  const copyIdx=list.findIndex(s=>s.id==='copy');
+  if(copyIdx>0){ const copy=list.splice(copyIdx,1)[0]; list.unshift(copy); }
+  w.innerHTML=list.map(s=>`<button class="seg ${ideaMode===s.id?'on':''}" onclick="setIdeaMode('${s.id}')">${esc(s.name)}</button>`).join('');
 }
 function setIdeaMode(id){
   if(ideaMode===id)return;
@@ -657,9 +660,9 @@ function renderIdeaHints(force){
   if(h.dataset.done&&!force){return;}
   const first=!h.dataset.done;
   h.dataset.done='1';
-  const hints=MODE_HINTS[ideaMode]||MODE_HINTS.train;
+  const hints=MODE_HINTS[ideaMode]||MODE_HINTS.copy;
   h.innerHTML=hints.map(t=>`<button class="qt" onclick="useHint(this)">${esc(t)}</button>`).join('');
-  if(first&&(!DB.chat||!DB.chat.length))addMsg('a','嗨，我是灵感搭档。上面先选板块（火车票 / 门票 / 飞机 / 酒店），我按那个板块的母题给点子；选「文案迭代」就直接贴原稿，我来诊断和改写。打法规则（AI 优势画面、反差不跑偏、10 秒纪律、合规红线）我都带着。');
+  if(first&&(!DB.chat||!DB.chat.length))addMsg('a','嗨，我是灵感搭档。默认在文案迭代模式——直接把你的文案/脚本贴进来，我来诊断和改写；要点子就切上面的板块（火车票/门票/飞机/酒店）。打法规则（AI 优势画面、反差不跑偏、10 秒纪律、合规红线）我都带着。');
 }
 function useHint(btn){
   const t=btn.textContent;
@@ -681,7 +684,7 @@ function addMsg(role,text){
   log.appendChild(div);
   // Persist to DB
   DB.chat=DB.chat||[];
-  DB.chat.push({role,text,t:Date.now(),mode:ideaMode||'train'});
+  DB.chat.push({role,text,t:Date.now(),mode:ideaMode||'copy'});
   if(DB.chat.length>200)DB.chat=DB.chat.slice(-200);
   dbSave(); log.scrollTop=log.scrollHeight;
   return div;
