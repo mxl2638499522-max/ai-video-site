@@ -1271,6 +1271,8 @@ function renderReasoningToggle(){
     if(pub.chars) DB.chars=pub.chars;
   }catch(e){}
   ['platforms','models','skus','chars','plates','photos','projects','outputs','ledger','ideaSkills','mainSkills','chat'].forEach(k=>{const v=DB[k];if(!v||(Array.isArray(v)&&!v.length))DB[k]=seedDb()[k];});
+  // A方案：每次重新打开网站，清空上次的临时聊天记录（有价值的内容已通过"带去制作"存进项目）
+  DB.chat=[];
   if(!loaded)dbSave();
   if(DB.settings&&DB.settings.curProjectId){const p=DB.projects.find(x=>x.id===DB.settings.curProjectId);if(p)CUR_PROJECT=p.id;else DB.settings.curProjectId='';dbSave();}
   initRender();
