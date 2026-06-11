@@ -1,0 +1,11 @@
+{
+  "name": "ai-video-site",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "serverless-http": "^4.0.0"
+  }
+}
