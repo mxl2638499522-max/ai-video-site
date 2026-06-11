@@ -639,6 +639,7 @@ let ideaMode='copy';
 // BASE_CHARTER/ideaSysPrompt/curSkill removed (server-side)
 function renderIdeaModes(){
   const w=document.getElementById('ideaModes');
+  if(!w)return;
   let list=(DB.ideaSkills||[]).slice();
   if(!list.length) list=seedDb().ideaSkills.slice();
   const copyIdx=list.findIndex(s=>s.id==='copy');
@@ -1273,6 +1274,8 @@ function renderReasoningToggle(){
   if(!loaded)dbSave();
   if(DB.settings&&DB.settings.curProjectId){const p=DB.projects.find(x=>x.id===DB.settings.curProjectId);if(p)CUR_PROJECT=p.id;else DB.settings.curProjectId='';dbSave();}
   initRender();
+  // 兜底：确保板块胶囊一定渲染（即使 initRender 中某步静默失败）
+  setTimeout(()=>{ renderIdeaModes(); renderReasoningToggle(); }, 20);
 })();
 
 </script>
