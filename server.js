@@ -52,8 +52,8 @@ const PUBLIC = {
   ]
 };
 
-// ============ DeepSeek API 调用 ============
-async function callDeepSeek(systemPrompt, messages, maxTokens = 1000) {
+// ============ DeepSeek 流式 API 调用 ============
+async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk) {
   const msgs = [];
   if (systemPrompt) msgs.push({ role: 'system', content: systemPrompt });
   msgs.push(...messages);
@@ -61,7 +61,7 @@ async function callDeepSeek(systemPrompt, messages, maxTokens = 1000) {
   const r = await fetch('https://api.deepseek.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SECRETS.deepseekKey },
-    body: JSON.stringify({ model: DS_MODEL, max_tokens: maxTokens, messages: msgs })
+    body: JSON.stringify({ model: DS_MODEL, max_tokens: maxTokens, messages: msgs, stream: true })
   });
 
   if (!r.ok) {
@@ -69,24 +69,52 @@ async function callDeepSeek(systemPrompt, messages, maxTokens = 1000) {
     throw new Error('DeepSeek HTTP ' + r.status + ': ' + err.slice(0, 200));
   }
 
-  const j = await r.json();
-  const msg = (j.choices || [])[0]?.message || {};
-  let content = msg.content || '';
-  let reasoning = msg.reasoning_content || '';
+  let content = '', reasoning = '', model = DS_MODEL, cacheHit = 0;
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
 
-  // 剥离 <think> 标签，并入 reasoning
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const s = line.trim();
+      if (!s.startsWith('data: ')) continue;
+      const jsonStr = s.slice(6);
+      if (jsonStr === '[DONE]') continue;
+      try {
+        const json = JSON.parse(jsonStr);
+        const delta = (json.choices || [])[0]?.delta || {};
+        if (delta.content) {
+          content += delta.content;
+          onChunk({ type: 'content', text: delta.content });
+        }
+        if (delta.reasoning_content) {
+          reasoning += delta.reasoning_content;
+          onChunk({ type: 'reasoning', text: delta.reasoning_content });
+        }
+        if (json.model) model = json.model;
+        if (json.usage?.prompt_cache_hit_tokens) cacheHit = json.usage.prompt_cache_hit_tokens;
+      } catch (e) { /* skip malformed chunks */ }
+    }
+  }
+
+  // 后处理：剥离 content 中的 <think> 标签（兼容非原生 reasoning 模型）
   const thinkMatch = content.match(/<think>([\s\S]*?)<\/think>/);
   if (thinkMatch) {
     reasoning = (reasoning ? reasoning + '\n' : '') + thinkMatch[1].trim();
     content = content.replace(/<think>[\s\S]*?<\/think>\n?/g, '').trim();
   }
 
-  return {
-    content,
-    reasoning,
-    model: j.model || DS_MODEL,
-    cacheHit: (j.usage && j.usage.prompt_cache_hit_tokens) || 0
-  };
+  return { content, reasoning, model, cacheHit };
+}
+
+// SSE 辅助：向客户端写一条 SSE 事件
+function sse(res, data) {
+  res.write('data: ' + JSON.stringify(data) + '\n\n');
 }
 
 // ============ API 路由 ============
@@ -96,29 +124,66 @@ app.get('/api/config', (req, res) => {
   res.json(PUBLIC);
 });
 
-// AI 润色
+// AI 润色（SSE 流式）
 app.post('/api/polish', async (req, res) => {
   try {
     const { kind, prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: '缺少 prompt' });
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+    res.write(': connected\n\n');
+
     const sys = skills.getPolishSystem(kind);
-    const { content, model } = await callDeepSeek(sys, [{ role: 'user', content: prompt }], 3000);
-    res.json({ result: content, model });
+    const { content, model } = await callDeepSeekStream(sys, [{ role: 'user', content: prompt }], 3000,
+      (chunk) => { if (chunk.type === 'content') sse(res, { type: 'content', text: chunk.text }); }
+    );
+
+    sse(res, { type: 'done', model });
+    res.end();
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message });
+    } else {
+      sse(res, { type: 'error', message: e.message });
+      res.end();
+    }
   }
 });
 
-// 灵感聊天
+// 灵感聊天（SSE 流式）
 app.post('/api/idea', async (req, res) => {
   try {
     const { section, messages } = req.body;
     if (!messages || !messages.length) return res.status(400).json({ error: '缺少消息' });
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive'
+    });
+    res.write(': connected\n\n');
+
     const systemPrompt = skills.getIdeaSystem(section);
-    const { content, reasoning, model, cacheHit } = await callDeepSeek(systemPrompt, messages, 4000);
-    res.json({ result: content, reasoning, model, cacheHit });
+    const { reasoning, model, cacheHit } = await callDeepSeekStream(systemPrompt, messages, 4000,
+      (chunk) => {
+        if (chunk.type === 'content') sse(res, { type: 'content', text: chunk.text });
+        else if (chunk.type === 'reasoning') sse(res, { type: 'reasoning', text: chunk.text });
+      }
+    );
+
+    sse(res, { type: 'done', model, reasoning, cacheHit });
+    res.end();
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message });
+    } else {
+      sse(res, { type: 'error', message: e.message });
+      res.end();
+    }
   }
 });
 

@@ -611,16 +611,25 @@ async function callAi(system,messages,kind){
 async function polishOut(id){
   const o=DB.outputs.find(x=>x.id===id); if(!o)return;
   const st=document.getElementById('outStatus'); if(st)st.textContent='AI 润色中...';
-  try{
-    const r=await fetch('/api/polish',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:o.kind,prompt:o.prompt})});
-    const d=await r.json();
-    if(d.error)throw new Error(d.error);
-    o.prompt=d.result.trim();o.polished=true;dbSave();
-    const pre=document.getElementById('outPre');if(pre)pre.textContent=o.prompt;
-    if(st)st.textContent='已润色为完整提示词,可复制粘贴。';
-  }catch(e){
-    if(st)st.textContent='润色失败：请确认服务器在运行。';
-  }
+  const pre=document.getElementById('outPre');
+  let fullText='';
+  streamAi('/api/polish',{kind:o.kind,prompt:o.prompt},{
+    onContent(text){
+      fullText+=text;
+      if(pre)pre.textContent=fullText;
+    },
+    onDone(d){
+      o.prompt=fullText.trim();o.polished=true;dbSave();
+      if(st)st.textContent='已润色为完整提示词，可复制粘贴。';
+      const cpBtn=document.getElementById('cpBtn');
+      if(cpBtn){cpBtn.textContent='复制';cpBtn.disabled=false;}
+    },
+    onError(msg){
+      if(st)st.textContent='润色失败：'+(msg||'请确认服务器在运行。');
+      const cpBtn=document.getElementById('cpBtn');
+      if(cpBtn)cpBtn.disabled=false;
+    }
+  });
 }
 
 /* ================= 灵感聊天（板块化 skill） ================= */
@@ -689,35 +698,86 @@ function addMsg(role,text){
   dbSave(); log.scrollTop=log.scrollHeight;
   return div;
 }
+/* ========== SSE 流式读取 ========== */
+async function streamAi(url,body,callbacks){
+  const {onContent,onReasoning,onDone,onError}=callbacks;
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!r.ok){const t=await r.text().catch(()=>'');throw new Error('HTTP '+r.status+' '+t.slice(0,200));}
+    const reader=r.body.getReader();const dec=new TextDecoder();let buf='';
+    while(true){
+      const{value,done}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop()||'';
+      for(const L of lines){
+        if(!L.startsWith('data: '))continue;
+        try{const d=JSON.parse(L.slice(6));
+          if(d.type==='content'&&onContent)onContent(d.text);
+          else if(d.type==='reasoning'&&onReasoning)onReasoning(d.text);
+          else if(d.type==='done'&&onDone)onDone(d);
+          else if(d.type==='error'&&onError)onError(d.message);
+        }catch(e){}
+      }
+    }
+  }catch(e){if(onError)onError(e.message);}
+}
+
 async function sendIdea(){
   const inp=document.getElementById('chatInput');
   const txt=inp.value.trim(); if(!txt)return;
   inp.value=''; inp.style.height='auto'; addMsg('u',txt);
   IDEA_HISTORY.push({role:'user',content:txt});
   const log=document.getElementById('chatLog');
-  const loading=document.createElement('div');
-  loading.className='msg msgSys';
-  loading.innerHTML='<span class="spin"></span> 思考中';
-  log.appendChild(loading);
-  log.scrollTop=log.scrollHeight;
-  try{
-    const r=await fetch('/api/idea',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({section:ideaMode,messages:IDEA_HISTORY.slice(-12)})});
-    const d=await r.json();
-    loading.remove();
-    if(d.error)throw new Error(d.error);
-    if(d.model){ const mt=document.getElementById('modelTag'); if(mt)mt.textContent='模型：'+d.model; }
-    if(DB.settings.showReasoning && d.reasoning){
-      const rd=document.createElement('div'); rd.className='msg msgSys';
-      rd.innerHTML='<div class="reasoning"><b>思考：</b>'+esc(d.reasoning)+'</div>';
-      log.appendChild(rd);
-    }
-    IDEA_HISTORY.push({role:'assistant',content:d.result});
-    addMsg('a',d.result);
-    log.scrollTop=log.scrollHeight;
-  }catch(e){
-    loading.remove();
-    addMsg('s','调用失败：请确认服务器在运行。');
+
+  // 思考条（reasoning）
+  let reasoningDiv=null, reasoningText='';
+  if(DB.settings.showReasoning){
+    reasoningDiv=document.createElement('div'); reasoningDiv.className='msg msgSys';
+    reasoningDiv.innerHTML='<div class="reasoning"><b>思考：</b></div>';
+    log.appendChild(reasoningDiv);
   }
+
+  // 回复气泡（带 spinner 占位）
+  const msgDiv=document.createElement('div'); msgDiv.className='msg msgA';
+  msgDiv.innerHTML='<span class="spin"></span> 思考中';
+  log.appendChild(msgDiv); log.scrollTop=log.scrollHeight;
+
+  let fullText='';
+  streamAi('/api/idea',{section:ideaMode,messages:IDEA_HISTORY.slice(-12)},{
+    onContent(text){
+      fullText+=text;
+      // 第一次收到正文时清除 spinner
+      if(msgDiv.querySelector('.spin')) msgDiv.textContent='';
+      msgDiv.textContent=fullText;
+      log.scrollTop=log.scrollHeight;
+    },
+    onReasoning(text){
+      if(!reasoningDiv)return;
+      reasoningText+=text;
+      const re=reasoningDiv.querySelector('.reasoning');
+      if(re)re.innerHTML='<b>思考：</b>'+esc(reasoningText);
+      log.scrollTop=log.scrollHeight;
+    },
+    onDone(d){
+      if(msgDiv.querySelector('.spin')) msgDiv.textContent='（空回复）';
+      if(d.model){const mt=document.getElementById('modelTag');if(mt)mt.textContent='模型：'+d.model;}
+      // 带去制作按钮
+      if(fullText.length>10){
+        const act=document.createElement('div');act.className='mAct';
+        const btn=document.createElement('button');btn.className='btnP';btn.style.cssText='font-size:11px;padding:4px 14px';
+        btn.textContent='带去制作 →';btn.onclick=()=>takeToMake(fullText);
+        act.appendChild(btn);msgDiv.appendChild(act);
+      }
+      IDEA_HISTORY.push({role:'assistant',content:fullText});
+      DB.chat=DB.chat||[];
+      DB.chat.push({role:'a',text:fullText,t:Date.now(),mode:ideaMode||'copy'});
+      if(DB.chat.length>200)DB.chat=DB.chat.slice(-200);
+      dbSave(); log.scrollTop=log.scrollHeight;
+    },
+    onError(msg){
+      if(msgDiv.querySelector('.spin')) msgDiv.innerHTML='';
+      msgDiv.textContent='调用失败：'+(msg||'请确认服务器在运行。');
+    }
+  });
 }
 function bindChatInput(){
   const inp=document.getElementById('chatInput');
