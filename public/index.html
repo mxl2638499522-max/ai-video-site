@@ -157,9 +157,9 @@ a{color:var(--acL)}
 .msgA{align-self:flex-start;background:var(--panel);border:1px solid var(--bd);color:#cfd1d6}
 .msgA .mAct{margin-top:8px}
 .msgSys{align-self:center;color:var(--t4);font-size:11px;background:none;border:none;text-align:center}
-.chatBar{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;background:var(--panel);border:1px solid var(--bd2);border-radius:14px;padding:10px 12px;margin-top:10px}
+.chatBar{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;background:var(--panel);border:1px solid var(--bd2);border-radius:14px;padding:14px 16px;margin-top:10px}
 .chatBar:focus-within{border-color:var(--acBd)}
-.chatBar textarea{width:100%;background:none;border:none;outline:none;resize:none;font-size:13.5px;color:var(--t1);min-height:42px;max-height:140px;line-height:1.6;padding:4px 2px;font-family:inherit;display:block}
+.chatBar textarea{width:100%;background:none;border:none;outline:none;resize:none;font-size:14px;color:var(--t1);min-height:52px;max-height:160px;line-height:1.6;padding:4px 2px;font-family:inherit;display:block;overflow-y:auto}
 .hintRow{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
 
 /* ---------- 资产库 / 表格 ---------- */
@@ -406,13 +406,12 @@ function nav(p){
   document.querySelectorAll('.page').forEach(s=>s.classList.toggle('on',s.id==='pg-'+(p==='make'?'make':p)));
   const names={home:'首页',make:'制作',assets:'资产库',projects:'项目',cost:'成本台账',tutorial:'教程',settings:'设置'};
   document.getElementById('crumb').textContent=names[p];
-  if(p==='make'){renderRecent();renderProjPill();}
-  if(p==='make'){updateCurProjPill();}
+  if(p==='make'){renderRecent();updateCurProjPill();}
   if(p==='assets')renderAssets();
   if(p==='projects')renderProjects();
   if(p==='cost')renderCost();
   if(p==='settings')renderSettings();
-  if(p==='ideas'){renderIdeaModes();renderIdeaHints();}
+  if(p==='home'){renderIdeaModes();renderIdeaHints();bindChatInput();}
 }
 
 function renderBadges(){
@@ -646,7 +645,7 @@ function renderIdeaHints(force){
   h.dataset.done='1';
   const hints=MODE_HINTS[ideaMode]||MODE_HINTS.train;
   h.innerHTML=hints.map(t=>`<button class="qt" onclick="useHint(this)">${esc(t)}</button>`).join('');
-  if(first)addMsg('a','嗨，我是灵感搭档。上面先选板块（火车票 / 门票 / 飞机 / 酒店），我按那个板块的母题给点子；选「文案迭代」就直接贴原稿，我来诊断和改写。打法规则（AI 优势画面、反差不跑偏、10 秒纪律、合规红线）我都带着。');
+  if(first&&(!DB.chat||!DB.chat.length))addMsg('a','嗨，我是灵感搭档。上面先选板块（火车票 / 门票 / 飞机 / 酒店），我按那个板块的母题给点子；选「文案迭代」就直接贴原稿，我来诊断和改写。打法规则（AI 优势画面、反差不跑偏、10 秒纪律、合规红线）我都带着。');
 }
 function useHint(btn){
   const t=btn.textContent;
@@ -676,7 +675,7 @@ function addMsg(role,text){
 async function sendIdea(){
   const inp=document.getElementById('chatInput');
   const txt=inp.value.trim(); if(!txt)return;
-  inp.value=''; addMsg('u',txt);
+  inp.value=''; inp.style.height='auto'; addMsg('u',txt);
   IDEA_HISTORY.push({role:'user',content:txt});
   const loading=addMsg('s','...');
   try{
@@ -698,7 +697,7 @@ function bindChatInput(){
   inp.addEventListener('keydown',function(e){
     if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();sendIdea();}
   });
-  inp.addEventListener('input',function(){this.style.height='auto';this.style.height=Math.min(120,this.scrollHeight)+'px';});
+  inp.addEventListener('input',function(){this.style.height='auto';this.style.height=Math.min(160,this.scrollHeight)+'px';});
 }
 
 /* ================= 最近产出 + 产出弹窗 ================= */
@@ -1111,6 +1110,12 @@ function restoreChatHistory(){
   const log=document.getElementById('chatLog');
   if(!log||!DB.chat||!DB.chat.length)return;
   log.innerHTML='';
+  IDEA_HISTORY.length=0;
+  DB.chat.forEach(m=>{
+    if(m.role==='u')IDEA_HISTORY.push({role:'user',content:m.text});
+    else if(m.role==='a')IDEA_HISTORY.push({role:'assistant',content:m.text});
+  });
+  if(IDEA_HISTORY.length>24)IDEA_HISTORY.splice(0,IDEA_HISTORY.length-24);
   DB.chat.forEach(m=>{
     const div=document.createElement('div');
     div.className='msg '+(m.role==='u'?'msgU':m.role==='a'?'msgA':'msgSys');
@@ -1157,6 +1162,7 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape')closeModal(); });
 function initRender(){
   renderBadges(); refreshPills(); renderQts(); renderRecent(); renderTutorial();
   renderAssets(); renderProjects(); renderCost(); renderSettings();
+  renderIdeaModes(); restoreChatHistory(); renderIdeaHints(); bindChatInput();
 }
 (async function(){
   const loaded=await rawLoad();
