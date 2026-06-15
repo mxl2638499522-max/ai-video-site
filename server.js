@@ -97,9 +97,54 @@ async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk, to
   if (systemPrompt) msgs.push({ role: 'system', content: systemPrompt });
   msgs.push(...messages);
 
-  const body = { model: DS_MODEL, max_tokens: maxTokens, messages: msgs, stream: true };
-  if (tools && round < 3) body.tools = [tools];
+  // 如果需要工具调用，第一轮用非流式（稳定处理 tool_calls），
+  // 工具结果追加后再用流式生成最终回答
+  if (tools && round === 0) {
+    const body0 = { model: DS_MODEL, max_tokens: maxTokens, messages: msgs, tools: [tools] };
+    const r0 = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SECRETS.deepseekKey },
+      body: JSON.stringify(body0)
+    });
+    if (!r0.ok) {
+      const err = await r0.text();
+      throw new Error('DeepSeek HTTP ' + r0.status + ': ' + err.slice(0, 200));
+    }
+    const j0 = await r0.json();
+    const msg0 = (j0.choices || [])[0]?.message || {};
+    const reasoning0 = msg0.reasoning_content || '';
+    const cacheHit0 = (j0.usage?.prompt_cache_hit_tokens) || 0;
+    const tcArr = msg0.tool_calls || [];
 
+    // 有 tool_calls 时执行搜索并递归
+    if (tcArr.length > 0) {
+      // 推送前端的 reasoning（非流式阶段也有思考过程）
+      if (reasoning0) onChunk({ type: 'reasoning', text: reasoning0 });
+      msgs.push({ role: 'assistant', reasoning_content: reasoning0, tool_calls: tcArr });
+      for (const tc of tcArr) {
+        if (tc.function?.name === 'web_search') {
+          let query = '';
+          try { query = JSON.parse(tc.function.arguments || '{}').query || ''; } catch (e) {}
+          if (query) {
+            const sr = await bochaSearch(query);
+            msgs.push({ role: 'tool', tool_call_id: tc.id, content: sr || '(未找到相关结果)' });
+          }
+        }
+      }
+      if (msgs.some(m => m.role === 'tool')) {
+        return await callDeepSeekStream(null, msgs.slice(1), maxTokens, onChunk, tools, round + 1);
+      }
+    }
+    // 无 tool_calls，直接返回内容（非流式结果）
+    let content0 = msg0.content || '', reasoningFinal = reasoning0;
+    const tm = content0.match(/<think>([\s\S]*?)<\/think>/);
+    if (tm) { reasoningFinal = (reasoningFinal ? reasoningFinal + '\n' : '') + tm[1].trim(); content0 = content0.replace(/<think>[\s\S]*?<\/think>\n?/g, '').trim(); }
+    if (content0) onChunk({ type: 'content', text: content0 });
+    return { content: content0, reasoning: reasoningFinal, model: j0.model || DS_MODEL, cacheHit: cacheHit0 };
+  }
+
+  // 无工具或已执行过工具调用 → 流式输出
+  const body = { model: DS_MODEL, max_tokens: maxTokens, messages: msgs, stream: true };
   const r = await fetch('https://api.deepseek.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SECRETS.deepseekKey },
@@ -112,10 +157,6 @@ async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk, to
   }
 
   let content = '', reasoning = '', model = DS_MODEL, cacheHit = 0;
-  // 累积 tool_calls（流式下发时为增量片段）
-  const tcMap = {};
-  let finishReason = '';
-
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -133,8 +174,7 @@ async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk, to
       if (jsonStr === '[DONE]') continue;
       try {
         const json = JSON.parse(jsonStr);
-        const choice = (json.choices || [])[0] || {};
-        const delta = choice.delta || {};
+        const delta = (json.choices || [])[0]?.delta || {};
         if (delta.content) {
           content += delta.content;
           onChunk({ type: 'content', text: delta.content });
@@ -143,51 +183,16 @@ async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk, to
           reasoning += delta.reasoning_content;
           onChunk({ type: 'reasoning', text: delta.reasoning_content });
         }
-        // 累积 tool_calls 增量
-        if (delta.tool_calls) {
-          delta.tool_calls.forEach(tc => {
-            const idx = tc.index != null ? tc.index : 0;
-            if (!tcMap[idx]) tcMap[idx] = { id: '', name: '', args: '' };
-            if (tc.id) tcMap[idx].id = tc.id;
-            if (tc.function) {
-              if (tc.function.name) tcMap[idx].name = tcMap[idx].name + tc.function.name;
-              if (tc.function.arguments) tcMap[idx].args = tcMap[idx].args + tc.function.arguments;
-            }
-          });
-        }
-        if (choice.finish_reason) finishReason = choice.finish_reason;
         if (json.model) model = json.model;
         if (json.usage?.prompt_cache_hit_tokens) cacheHit = json.usage.prompt_cache_hit_tokens;
       } catch (e) { /* skip malformed chunks */ }
     }
   }
 
-  // 后处理：剥离 <think> 标签
   const thinkMatch = content.match(/<think>([\s\S]*?)<\/think>/);
   if (thinkMatch) {
     reasoning = (reasoning ? reasoning + '\n' : '') + thinkMatch[1].trim();
     content = content.replace(/<think>[\s\S]*?<\/think>\n?/g, '').trim();
-  }
-
-  // 工具调用循环：搜到结果后追加到 messages，再次调用
-  if (finishReason === 'tool_calls' && round < 3) {
-    const tcList = Object.values(tcMap);
-    for (const tc of tcList) {
-      if (tc.name === 'web_search' && tc.id) {
-        let query = '';
-        try { const args = JSON.parse(tc.args); query = args.query || ''; } catch (e) {}
-        if (query) {
-          const searchResult = await bochaSearch(query);
-          const tcMsg = { role: 'assistant', tool_calls: [{ id: tc.id, type: 'function', function: { name: 'web_search', arguments: tc.args } }] };
-          if (reasoning) tcMsg.reasoning_content = reasoning;
-          msgs.push(tcMsg);
-          msgs.push({ role: 'tool', tool_call_id: tc.id, content: searchResult || '(未找到相关结果)' });
-        }
-      }
-    }
-    if (msgs.some(m => m.role === 'tool')) {
-      return await callDeepSeekStream(null, msgs.slice(1), maxTokens, onChunk, tools, round + 1);
-    }
   }
 
   return { content, reasoning, model, cacheHit };
