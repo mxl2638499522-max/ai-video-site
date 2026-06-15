@@ -169,16 +169,18 @@ async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk, to
     content = content.replace(/<think>[\s\S]*?<\/think>\n?/g, '').trim();
   }
 
-  // 工具调用循环：搜到结果后追加到 messages，再次调用（不重复加 systemPrompt）
+  // 工具调用循环：搜到结果后追加到 messages，再次调用
   if (finishReason === 'tool_calls' && round < 3) {
     const tcList = Object.values(tcMap);
     for (const tc of tcList) {
-      if (tc.name === 'web_search') {
+      if (tc.name === 'web_search' && tc.id) {
         let query = '';
         try { const args = JSON.parse(tc.args); query = args.query || ''; } catch (e) {}
         if (query) {
           const searchResult = await bochaSearch(query);
-          msgs.push({ role: 'assistant', content: null, reasoning_content: reasoning, tool_calls: [{ id: tc.id, type: 'function', function: { name: 'web_search', arguments: tc.args } }] });
+          const tcMsg = { role: 'assistant', tool_calls: [{ id: tc.id, type: 'function', function: { name: 'web_search', arguments: tc.args } }] };
+          if (reasoning) tcMsg.reasoning_content = reasoning;
+          msgs.push(tcMsg);
           msgs.push({ role: 'tool', tool_call_id: tc.id, content: searchResult || '(未找到相关结果)' });
         }
       }
