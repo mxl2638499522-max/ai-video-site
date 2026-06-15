@@ -589,6 +589,7 @@ function copyOut(id){
   else{ fallbackCopy(o.prompt); doneUi(); }
 }
 function fallbackCopy(t){ const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy');}catch(e){} ta.remove(); }
+function copyText(t){ if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(()=>toast('已复制')).catch(()=>{fallbackCopy(t);toast('已复制');}); else{fallbackCopy(t);toast('已复制');} }
 function settleOut(id){
   const o=DB.outputs.find(x=>x.id===id); if(!o||o.settled){toast('这条已记过账');return;}
   const m=DB.models.find(x=>x.id===o.modelId); const pl=m?DB.platforms.find(p=>p.id===m.platformId):null;
@@ -688,8 +689,8 @@ function addMsg(role,text){
   if(role==='a'&&text.length>10){
     const act=document.createElement('div');act.className='mAct';
     const btn=document.createElement('button');btn.className='btnP';btn.style.cssText='font-size:11px;padding:4px 14px';
-    btn.textContent='带去制作 →';
-    btn.onclick=()=>takeToMake(text);
+    btn.textContent='存项目';
+    btn.onclick=()=>saveToProject();
     act.appendChild(btn);div.appendChild(act);
   }
   log.appendChild(div);
@@ -766,7 +767,7 @@ async function sendIdea(){
       if(fullText.length>10){
         const act=document.createElement('div');act.className='mAct';
         const btn=document.createElement('button');btn.className='btnP';btn.style.cssText='font-size:11px;padding:4px 14px';
-        btn.textContent='带去制作 →';btn.onclick=()=>takeToMake(fullText);
+        btn.textContent='存项目';btn.onclick=()=>saveToProject();
         act.appendChild(btn);msgDiv.appendChild(act);
       }
       IDEA_HISTORY.push({role:'assistant',content:fullText});
@@ -871,6 +872,24 @@ function confirmNewProject(){
   const p=createProject(t,document.getElementById('npNote').value.trim());
   p.skuId=document.getElementById('npSku').value; dbSave(); closeModal();
 }
+function chatLogHtml(log){
+  let h='<div style="margin-top:14px"><span class="lab">对话存档</span>';
+  h+='<div style="max-height:260px;overflow-y:auto;background:var(--panel3);border-radius:10px;padding:10px 12px;margin-top:6px">';
+  log.forEach(function(m){
+    var cls=m.role==="u"?"msgU":"msgA";
+    var label=m.role==="u"?"<span class=tiny style=color:var(--acL)>你</span>":"<span class=tiny style=color:var(--t4)>AI</span>";
+    var copyBtn="";
+    if(m.role==="a"){
+      var txt=esc(m.text).replace(/"/g,"&quot;");
+      copyBtn="<button class=btnA style=font-size:10px;padding:1px 8px;margin-left:8px;flex-shrink:0 onclick=\"event.stopPropagation();copyText(this.dataset.txt)\" data-txt=\""+txt+"\">复制</button>";
+    }
+    h+="<div class=\"msg "+cls+"\" style=max-width:92%;margin-bottom:8px;padding:8px 10px;font-size:12px;line-height:1.6>";
+    h+="<div class=flex style=gap:6px;align-items:flex-start>"+label;
+    h+="<div style=flex:1;min-width:0;white-space:pre-wrap;word-break:break-word>"+esc(m.text)+"</div>"+copyBtn+"</div></div>";
+  });
+  h+="</div></div>";
+  return h;
+}
 function openProjModal(id){
   const p=DB.projects.find(x=>x.id===id); if(!p)return;
   const outs=DB.outputs.filter(o=>o.projectId===id);
@@ -891,6 +910,7 @@ function openProjModal(id){
         <input class="inp" placeholder="GPM" value="${esc(p.data.gpm)}" onchange="updProjData('${id}','gpm',this.value)">
       </div></div>
     <div style="margin-top:12px"><span class="lab">备注 / 复盘</span><textarea class="ta" onchange="updProj('${id}','note',this.value)">${esc(p.note)}</textarea></div>
+    ${p.chatLog&&p.chatLog.length?chatLogHtml(p.chatLog):""}
     <div style="margin-top:14px"><span class="lab">关联产出（${outs.length}）</span>
       ${outs.length?outs.map(o=>`<div class="optRow" onclick="closeModal();openOutModal('${o.id}')"><div style="flex:1"><div class="oT" style="font-size:12px">${esc(o.title)}</div><div class="oD">${fmtT(o.t)} · ${o.kind==='video'?'视频':'图文'} · ${o.settled?(o.cost>0?o.cost+' 积分':'免费'):'未记账'}</div></div></div>`).join(''):'<p class="tiny">还没有产出。首页生成后在产出卡片里选「挂到项目」。</p>'}
     </div>
@@ -1163,18 +1183,20 @@ function importDb(inp){
   rd.readAsText(f);
 }
 
-// ===== 带去制作 + 项目切换 =====
-function takeToMake(text){
-  const title=text.split('\n')[0].slice(0,14)+(text.split('\n')[0].length>14?'…':'');
-  const p=createProject(title,('灵感来源：\n'+text).slice(0,500));
-  CUR_PROJECT=p.id;
-  if(!DB.settings)DB.settings={};
-  DB.settings.curProjectId=p.id;dbSave();
-  const firstPara=text.split('\n\n')[0].slice(0,120);
-  document.getElementById('scene').value=firstPara;
-  updateCurProjPill();
-  nav('make');
-  toast('已带入制作');
+// ===== 存项目 + 项目切换 =====
+function saveToProject(){
+  const msgs=(DB.chat||[]).filter(m=>m.role==='u'||m.role==='a');
+  if(!msgs.length){ toast('没有对话可存'); return; }
+  const firstUser=msgs.find(m=>m.role==='u');
+  const title=firstUser?firstUser.text.slice(0,14)+(firstUser.text.length>14?'…':''):('文案对话 '+new Date().toLocaleDateString());
+  const p={
+    id:uid(),title:title,status:0,cover:'',created:now(),updated:now(),skuId:'sku99',note:'',
+    data:{play:'',click:'',gpm:''},
+    chatLog:msgs.map(m=>({role:m.role,text:m.text,t:m.t||now()}))
+  };
+  DB.projects.unshift(p);dbSave();
+  toast('已存入项目');
+  nav('projects');
 }
 function showProjPicker(){
   const opts=DB.projects.map(p=>'<div class="optRow '+(CUR_PROJECT===p.id?'on':'')+'" onclick="CUR_PROJECT=\''+p.id+'\';if(!DB.settings)DB.settings={};DB.settings.curProjectId=p.id;dbSave();updateCurProjPill();closePop();" style="cursor:pointer"><div style="flex:1"><div class="oT">'+esc(p.title)+'</div><div class="oD">'+STATUS[p.status]+'</div></div>'+(CUR_PROJECT===p.id?'<span style="color:var(--acL)">✓</span>':'')+'</div>').join('');
@@ -1214,8 +1236,8 @@ function restoreChatHistory(){
     if(m.role==='a'&&m.text.length>10){
       const act=document.createElement('div');act.className='mAct';
       const btn=document.createElement('button');btn.className='btnP';btn.style.cssText='font-size:11px;padding:4px 14px';
-      btn.textContent='带去制作 →';
-      btn.onclick=()=>takeToMake(m.text);
+      btn.textContent='存项目';
+      btn.onclick=()=>saveToProject();
       act.appendChild(btn);div.appendChild(act);
     }
     log.appendChild(div);
