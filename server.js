@@ -114,11 +114,24 @@ async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk, to
     const msg0 = (j0.choices || [])[0]?.message || {};
     const reasoning0 = msg0.reasoning_content || '';
     const cacheHit0 = (j0.usage?.prompt_cache_hit_tokens) || 0;
-    const tcArr = msg0.tool_calls || [];
+    let tcArr = msg0.tool_calls || [];
+
+    // deepseek-v4-pro 在 thinking 模式可能把 tool_calls 写成 XML 嵌入 content/reasoning
+    const xmlText = (msg0.content || '') + (msg0.reasoning_content || '');
+    const xmlTcMatch = xmlText.match(/<tool_calls>([\s\S]*?)<\/tool_calls>/);
+    if (!tcArr.length && xmlTcMatch) {
+      const invokes = xmlTcMatch[0].matchAll(/<invoke name="web_search">\s*<parameter name="query"[^>]*>([\s\S]*?)<\/parameter>\s*<\/invoke>/g);
+      tcArr = [];
+      for (const m of invokes) {
+        const q = m[1].trim();
+        tcArr.push({ id: 'call_xml_' + tcArr.length, type: 'function', function: { name: 'web_search', arguments: JSON.stringify({ query: q }) } });
+      }
+      // 从 content 中剥离 XML tool_calls 块
+      msg0.content = (msg0.content || '').replace(/<tool_calls>[\s\S]*?<\/tool_calls>\n?/g, '').trim();
+    }
 
     // 有 tool_calls 时执行搜索并递归
     if (tcArr.length > 0) {
-      // 推送前端的 reasoning（非流式阶段也有思考过程）
       if (reasoning0) onChunk({ type: 'reasoning', text: reasoning0 });
       msgs.push({ role: 'assistant', reasoning_content: reasoning0, tool_calls: tcArr });
       for (const tc of tcArr) {
