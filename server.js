@@ -201,11 +201,13 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// 启动
-const PORT = process.env.PORT || 3456;
-app.listen(PORT, () => {
-  console.log(`Server: http://localhost:${PORT}`);
-  console.log(`Skills protected. Pricing visible.`);
-});
+// 启动（仅本地开发时监听，Vercel 通过 api/index.js 加载）
+if (require.main === module) {
+  const PORT = process.env.PORT || 3456;
+  app.listen(PORT, () => {
+    console.log(`Server: http://localhost:${PORT}`);
+    console.log(`Skills protected. Pricing visible.`);
+  });
+}
 
 module.exports = app;
