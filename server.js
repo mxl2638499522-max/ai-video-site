@@ -52,16 +52,58 @@ const PUBLIC = {
   ]
 };
 
+// ============ 博查 Web Search API ============
+async function bochaSearch(query) {
+  try {
+    const r = await fetch('https://api.bocha.cn/v1/web-search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (process.env.BOCHA_KEY || '') },
+      body: JSON.stringify({ query, freshness: 'noLimit', summary: true })
+    });
+    if (!r.ok) return '';
+    const j = await r.json();
+    if (j.code !== 200 || !j.data?.webPages?.value?.length) return '';
+    const results = j.data.webPages.value.slice(0, 6);
+    return results.map((p, i) => {
+      const title = (p.name || '').trim();
+      const url = (p.url || '');
+      const snippet = (p.summary || p.snippet || '').trim();
+      const date = (p.datePublished || '').slice(0, 10);
+      return `[${i + 1}] ${title}\n${snippet}\n${url}${date ? ' · ' + date : ''}`;
+    }).join('\n\n');
+  } catch (e) {
+    return '';
+  }
+}
+
+// 联网搜索工具定义（给 DeepSeek function calling）
+const WEB_SEARCH_TOOL = {
+  type: 'function',
+  function: {
+    name: 'web_search',
+    description: '搜索互联网获取最新信息：当下热点、节日活动、景点真实信息、门票价格、攻略等',
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: '搜索关键词' } },
+      required: ['query']
+    }
+  }
+};
+
 // ============ DeepSeek 流式 API 调用 ============
-async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk) {
+async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk, tools, round) {
+  round = round || 0;
   const msgs = [];
   if (systemPrompt) msgs.push({ role: 'system', content: systemPrompt });
   msgs.push(...messages);
 
+  const body = { model: DS_MODEL, max_tokens: maxTokens, messages: msgs, stream: true };
+  if (tools && round < 3) body.tools = [tools];
+
   const r = await fetch('https://api.deepseek.com/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SECRETS.deepseekKey },
-    body: JSON.stringify({ model: DS_MODEL, max_tokens: maxTokens, messages: msgs, stream: true })
+    body: JSON.stringify(body)
   });
 
   if (!r.ok) {
@@ -70,6 +112,10 @@ async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk) {
   }
 
   let content = '', reasoning = '', model = DS_MODEL, cacheHit = 0;
+  // 累积 tool_calls（流式下发时为增量片段）
+  const tcMap = {};
+  let finishReason = '';
+
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -87,7 +133,8 @@ async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk) {
       if (jsonStr === '[DONE]') continue;
       try {
         const json = JSON.parse(jsonStr);
-        const delta = (json.choices || [])[0]?.delta || {};
+        const choice = (json.choices || [])[0] || {};
+        const delta = choice.delta || {};
         if (delta.content) {
           content += delta.content;
           onChunk({ type: 'content', text: delta.content });
@@ -96,17 +143,49 @@ async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk) {
           reasoning += delta.reasoning_content;
           onChunk({ type: 'reasoning', text: delta.reasoning_content });
         }
+        // 累积 tool_calls 增量
+        if (delta.tool_calls) {
+          delta.tool_calls.forEach(tc => {
+            const idx = tc.index != null ? tc.index : 0;
+            if (!tcMap[idx]) tcMap[idx] = { id: '', name: '', args: '' };
+            if (tc.id) tcMap[idx].id = tc.id;
+            if (tc.function) {
+              if (tc.function.name) tcMap[idx].name = tcMap[idx].name + tc.function.name;
+              if (tc.function.arguments) tcMap[idx].args = tcMap[idx].args + tc.function.arguments;
+            }
+          });
+        }
+        if (choice.finish_reason) finishReason = choice.finish_reason;
         if (json.model) model = json.model;
         if (json.usage?.prompt_cache_hit_tokens) cacheHit = json.usage.prompt_cache_hit_tokens;
       } catch (e) { /* skip malformed chunks */ }
     }
   }
 
-  // 后处理：剥离 content 中的 <think> 标签（兼容非原生 reasoning 模型）
+  // 后处理：剥离 <think> 标签
   const thinkMatch = content.match(/<think>([\s\S]*?)<\/think>/);
   if (thinkMatch) {
     reasoning = (reasoning ? reasoning + '\n' : '') + thinkMatch[1].trim();
     content = content.replace(/<think>[\s\S]*?<\/think>\n?/g, '').trim();
+  }
+
+  // 工具调用循环：搜到结果后追加到 messages，再次调用（不重复加 systemPrompt）
+  if (finishReason === 'tool_calls' && round < 3) {
+    const tcList = Object.values(tcMap);
+    for (const tc of tcList) {
+      if (tc.name === 'web_search') {
+        let query = '';
+        try { const args = JSON.parse(tc.args); query = args.query || ''; } catch (e) {}
+        if (query) {
+          const searchResult = await bochaSearch(query);
+          msgs.push({ role: 'assistant', content: null, reasoning_content: reasoning, tool_calls: [{ id: tc.id, type: 'function', function: { name: 'web_search', arguments: tc.args } }] });
+          msgs.push({ role: 'tool', tool_call_id: tc.id, content: searchResult || '(未找到相关结果)' });
+        }
+      }
+    }
+    if (msgs.some(m => m.role === 'tool')) {
+      return await callDeepSeekStream(null, msgs.slice(1), maxTokens, onChunk, tools, round + 1);
+    }
   }
 
   return { content, reasoning, model, cacheHit };
@@ -172,7 +251,8 @@ app.post('/api/idea', async (req, res) => {
       (chunk) => {
         if (chunk.type === 'content') sse(res, { type: 'content', text: chunk.text });
         else if (chunk.type === 'reasoning') sse(res, { type: 'reasoning', text: chunk.text });
-      }
+      },
+      WEB_SEARCH_TOOL
     );
 
     sse(res, { type: 'done', model, reasoning, cacheHit });
