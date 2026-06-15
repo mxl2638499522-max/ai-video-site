@@ -58,7 +58,7 @@ async function bochaSearch(query) {
     const r = await fetch('https://api.bocha.cn/v1/web-search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (process.env.BOCHA_KEY || '') },
-      body: JSON.stringify({ query, freshness: 'noLimit', summary: true })
+      body: JSON.stringify({ query, freshness: 'pastMonth', summary: true })
     });
     if (!r.ok) return '';
     const j = await r.json();
@@ -81,7 +81,7 @@ const WEB_SEARCH_TOOL = {
   type: 'function',
   function: {
     name: 'web_search',
-    description: '搜索互联网获取最新信息：当下热点、节日活动、景点真实信息、门票价格、攻略等',
+    description: '搜索互联网获取最新信息：当下热点、节日活动、景点真实信息、门票价格、攻略等。注意：今天是2026年6月，搜索时请用2026年作为年份，避免搜到过时信息。',
     parameters: {
       type: 'object',
       properties: { query: { type: 'string', description: '搜索关键词' } },
