@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文案台 · 教程</title>
+<style>
+:root{
+  --bg:#0a0b0f;--surface:rgba(255,255,255,.04);--surface-2:rgba(255,255,255,.06);
+  --border:rgba(255,255,255,.10);--border-strong:rgba(255,255,255,.18);
+  --text:#edeef2;--text-2:#9aa0ab;--text-3:#676c77;
+  --accent:#34c77b;--accent-text:#5fe09c;--accent-weak:rgba(52,199,123,.14);
+  --r:18px;--r-sm:10px;
+  --font:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI","Noto Sans SC",sans-serif;
+}
+*{box-sizing:border-box}html,body{margin:0;min-height:100dvh}
+body{background:var(--bg);color:var(--text);font-family:var(--font);line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:680px;margin:0 auto;padding:0 22px 60px}
+nav{display:flex;align-items:center;gap:18px;height:60px}
+.brand{font-size:15px;font-weight:500;letter-spacing:.04em}.brand .a{color:var(--accent-text)}
+.nav-links{display:flex;gap:4px;margin-left:8px}
+.nav-link{font-size:14px;color:var(--text-2);padding:6px 12px;border-radius:var(--r-sm);cursor:pointer;text-decoration:none;transition:.15s}
+.nav-link:hover{color:var(--text);background:var(--surface)}
+.nav-link.on{color:var(--text);background:var(--surface-2)}
+h1{font-size:26px;font-weight:500;margin:40px 0 8px}
+.sub{font-size:14px;color:var(--text-2);margin:0 0 32px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:18px 20px;margin-bottom:14px}
+.card h3{font-size:15px;font-weight:500;margin:0 0 6px;color:var(--text)}
+.card p{font-size:14px;color:var(--text-2);margin:0;line-height:1.65}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <span class="brand">文案<span class="a">台</span></span>
+    <div class="nav-links">
+      <a class="nav-link" href="/">文案</a>
+      <a class="nav-link" href="/make">制作</a>
+      <a class="nav-link on">教程</a>
+    </div>
+  </nav>
+
+  <h1>使用须知</h1>
+  <p class="sub">先读一遍，少踩坑。</p>
+
+  <div class="card"><h3>文案不会自动保存，刷新就没了</h3><p>改好的文案及时点右下角「复制」抄走。目前还没有云端保存，刷新页面所有对话清空。</p></div>
+  <div class="card"><h3>功能还在补，现在主要把改文案做好</h3><p>保存、点子生成、制作联动这些后面会加，当前聚焦一件事：把贴进来的口播文案改好。</p></div>
+  <div class="card"><h3>卡住或出错先刷新，基本能好</h3><p>偶然后端冷启动慢、或 SSE 流断掉，刷新页面重新提交通常能恢复。还是不行就把文案重发一遍。</p></div>
+  <div class="card"><h3>一次一篇，改新的点左上角「新建」</h3><p>每次只改一篇文案。想改新的，点左上角「新建」按钮清空对话重新开始。</p></div>
+  <div class="card"><h3>方向选错不影响，直接打字也行</h3><p>迭代/套壳/爆款植入胶囊只是默认方向提示，AI 会根据文案内容自动判断该干什么。不选方向直接打字也完全没问题，选方向只是告诉它你倾向哪种改法。</p></div>
+  <div class="card"><h3>思考拆解：想看怎么改的就开，只要成品就关</h3><p>打开「思考拆解」会在结果后面展示 AI 的推理过程，方便理解为什么这样改。关了只出成品，速度也更快。</p></div>
+  <div class="card"><h3>「制作」还是老界面，先用着，以后再统一</h3><p>导航栏「制作」链到原来的图片/视频提示词生成工具，界面还没套新皮，以后会统一。</p></div>
+</div>
+</body>
+</html>

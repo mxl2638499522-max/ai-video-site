@@ -7,7 +7,63 @@ const express = require('express');
 const path = require('path');
 const skills = require('./skills');
 const app = express();
-app.use(express.json());
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+app.use(express.json({ limit: '200kb', strict: true }));
+app.use((err, req, res, next) => {
+  if (err?.type === 'entity.too.large') return res.status(413).json({ error: '请求内容过大' });
+  if (err instanceof SyntaxError && err.status === 400) return res.status(400).json({ error: '请求格式错误' });
+  next(err);
+});
+
+const ALLOWED_ORIGINS = new Set([
+  'https://www.ai-video-lab.xyz',
+  'https://ai-video-lab.xyz',
+  'https://ai-video-site-iota.vercel.app'
+]);
+const RATE_WINDOW_MS = 10 * 60 * 1000;
+const RATE_LIMIT = 30;
+const requestBuckets = new Map();
+
+app.use('/api', (req, res, next) => {
+  const origin = req.get('origin');
+  if (origin && !ALLOWED_ORIGINS.has(origin)) {
+    return res.status(403).json({ error: '不允许跨站调用' });
+  }
+
+  const now = Date.now();
+  const ip = req.ip || req.get('x-forwarded-for') || 'unknown';
+  if (requestBuckets.size > 5000) {
+    for (const [key, value] of requestBuckets) {
+      if (now - value.startedAt >= RATE_WINDOW_MS) requestBuckets.delete(key);
+    }
+  }
+  const bucket = requestBuckets.get(ip);
+  if (!bucket || now - bucket.startedAt >= RATE_WINDOW_MS) {
+    requestBuckets.set(ip, { startedAt: now, count: 1 });
+  } else {
+    bucket.count += 1;
+    if (bucket.count > RATE_LIMIT) {
+      res.set('Retry-After', String(Math.ceil((RATE_WINDOW_MS - (now - bucket.startedAt)) / 1000)));
+      return res.status(429).json({ error: '请求过于频繁，请稍后再试' });
+    }
+  }
+
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
+const IDEA_SECTIONS = new Set(['copy', 'train', 'ticket', 'flight', 'hotel']);
+function validMessages(messages) {
+  if (!Array.isArray(messages) || messages.length < 1 || messages.length > 20) return false;
+  let total = 0;
+  for (const message of messages) {
+    if (!message || !['user', 'assistant'].includes(message.role) || typeof message.content !== 'string') return false;
+    if (message.content.length < 1 || message.content.length > 20000) return false;
+    total += message.content.length;
+  }
+  return total <= 50000;
+}
 
 // DeepSeek 旗舰模型（可通过环境变量覆盖）
 const DS_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro';
@@ -89,6 +145,13 @@ const WEB_SEARCH_TOOL = {
     }
   }
 };
+
+// 文案改写默认不需要联网。只有用户明确询问实时信息时才启用搜索工具，
+// 避免首轮工具判断阻塞流式输出几十秒。
+function needsWebSearch(messages) {
+  const latest = [...messages].reverse().find(m => m.role === 'user')?.content || '';
+  return /(联网|搜索|查一下|查找|最新|实时|今天|目前|现在的|热搜|新闻|天气|票价|价格|营业时间|开放时间|航班|列车时刻|余票|近期活动)/i.test(latest);
+}
 
 // ============ DeepSeek 流式 API 调用 ============
 async function callDeepSeekStream(systemPrompt, messages, maxTokens, onChunk, tools, round) {
@@ -227,7 +290,10 @@ app.get('/api/config', (req, res) => {
 app.post('/api/polish', async (req, res) => {
   try {
     const { kind, prompt } = req.body;
-    if (!prompt) return res.status(400).json({ error: '缺少 prompt' });
+    if (!['video', 'image'].includes(kind) || typeof prompt !== 'string' || !prompt.trim()) {
+      return res.status(400).json({ error: '请求参数无效' });
+    }
+    if (prompt.length > 20000) return res.status(413).json({ error: '请求内容过大' });
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -257,7 +323,9 @@ app.post('/api/polish', async (req, res) => {
 app.post('/api/idea', async (req, res) => {
   try {
     const { section, messages } = req.body;
-    if (!messages || !messages.length) return res.status(400).json({ error: '缺少消息' });
+    if (!IDEA_SECTIONS.has(section) || !validMessages(messages)) {
+      return res.status(400).json({ error: '请求参数无效' });
+    }
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -267,12 +335,13 @@ app.post('/api/idea', async (req, res) => {
     res.write(': connected\n\n');
 
     const systemPrompt = skills.getIdeaSystem(section);
+    const searchTool = needsWebSearch(messages) ? WEB_SEARCH_TOOL : null;
     const { reasoning, model, cacheHit } = await callDeepSeekStream(systemPrompt, messages, 4000,
       (chunk) => {
         if (chunk.type === 'content') sse(res, { type: 'content', text: chunk.text });
         else if (chunk.type === 'reasoning') sse(res, { type: 'reasoning', text: chunk.text });
       },
-      WEB_SEARCH_TOOL
+      searchTool
     );
 
     sse(res, { type: 'done', model, reasoning, cacheHit });
@@ -284,6 +353,51 @@ app.post('/api/idea', async (req, res) => {
       sse(res, { type: 'error', message: e.message });
       res.end();
     }
+  }
+});
+
+// 更多话题（博查直接搜 + DS 提炼短语）
+app.post('/api/more-topics', async (req, res) => {
+  try {
+    const { section, season } = req.body;
+    if (!IDEA_SECTIONS.has(section) || section === 'copy') return res.status(400).json({ error: '请求参数无效' });
+    const pname = {train:'火车票',ticket:'景区门票',flight:'机票',hotel:'酒店'}[section]||'出行';
+    const nodes = (season&&season.节点||['暑假','毕业季']).join('、');
+    const crowds = (season&&season.人群||['学生','亲子']).join('、');
+
+    // 博查搜 3 个方向，合并结果
+    const queries = [`${nodes} ${pname}`, `${crowds} ${pname} 推荐`, `${pname} 最新优惠 旅游热搜`];
+    let searchResults = '';
+    for (const q of queries) {
+      const sr = await bochaSearch(q);
+      if (sr) searchResults += sr + '\n\n';
+    }
+
+    const sysPrompt = `你是话题提炼助手。根据搜索结果，为${pname}品类提炼4-6个话题短语（4-8字）。只返回JSON字符串数组如["短语1","短语2"]，不要任何解释。`;
+    const msgs = [
+      { role: 'system', content: sysPrompt },
+      { role: 'user', content: searchResults ? `搜索结果：\n${searchResults.slice(0, 4000)}\n\n为${pname}提炼话题短语：` : `直接给${pname}品类4-6个话题短语` }
+    ];
+    const r2 = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + SECRETS.deepseekKey },
+      body: JSON.stringify({ model: DS_MODEL, max_tokens: 400, messages: msgs, stream: false })
+    });
+    if (!r2.ok) { const err = await r2.text(); return res.status(502).json({ error: err.slice(0, 100) }); }
+    const j2 = await r2.json();
+    const raw = ((j2.choices || [])[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
+    let topics = [];
+    try {
+      let js = raw;
+      const m = raw.match(/```(?:json)?\s*([\s\S]*?)```/); if (m) js = m[1].trim();
+      const a = js.match(/\[[\s\S]*?\]/); if (a) js = a[0];
+      topics = JSON.parse(js); if (!Array.isArray(topics)) topics = [];
+    } catch (e) {
+      topics = raw.split(/[\n,，]+/).map(s => s.replace(/["\[\]\d\.\s\-]/g, '').trim()).filter(s => s.length>=2&&s.length<=14).slice(0, 6);
+    }
+    res.json({ topics: topics.slice(0, 6) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
